@@ -176,7 +176,7 @@ void SensorDistancia::task_main()
 			(double)distance_sensor_param.max_distance,
 			(double)distance_sensor_param.current_distance,
 			(double)distance_sensor_param.covariance,
-			(int)distance_sensor_param.type,
+			(uint8_t)distance_sensor_param.type,
 			(uint8_t)distance_sensor_param.orientation);
 		}
 
