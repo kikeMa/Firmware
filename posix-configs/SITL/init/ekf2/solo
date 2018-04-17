@@ -52,6 +52,7 @@ adcsim start
 gpssim start
 pwm_out_sim start
 sensors start
+px4_simple_app start
 commander start
 land_detector start multicopter
 navigator start
