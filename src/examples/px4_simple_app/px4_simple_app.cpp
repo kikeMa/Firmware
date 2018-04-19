@@ -48,14 +48,20 @@
 #include <math.h>
 
 #include <uORB/uORB.h>
+#include <uORB/topics/vehicle_status.h>
+#include <uORB/topics/vehicle_command.h>
+
+//#include <mc_pos_control/mc_pos_control_main.cpp>
 #include <uORB/topics/sensor_baro.h>	// Altura por barometro
 #include <uORB/topics/vehicle_attitude.h>	// velocidad (rollspeed, pitchspeed, yawspeed)
 #include <uORB/topics/distance_sensor.h>	// sensor de distancia (min_distance, max_distance, current_distance, coveriance ,MAV_DISTANCE_SENSOR_LASER)
+#include <uORB/topics/vehicle_control_mode.h>	// sensor de distancia (min_distance, max_distance, current_distance, coveriance ,MAV_DISTANCE_SENSOR_LASER)
 //#include <uORb/topics/vehicle_local_position.h>	// altura (z)
 
 extern "C" __EXPORT int px4_simple_app_main(int argc, char *argv[]);
 
 class SensorDistancia;
+
 
 namespace sensor_distancia_q
 {
@@ -142,35 +148,32 @@ void SensorDistancia::task_main_sensor_distancia(int argc, char *argv[])
 	sensor_distancia_q::instance->task_main();
 }
 
-/*
-int SensorDistancia::nearlyEqual(float a, float b, float epsilon)
-{
-	float absA = abs(a);
-	float absB = abs(b);
-	float diff = abs(a - b);
 
-	if (diff == 0) { // Atajo, maneja los infinitos
-		return 1;
-	} else if (a * b == 0) { // a o b o ambos son cero
-		// El error relativo no es importante aquí
-		return diff < (epsilon * epsilon);
-	} else { // Usar el error relativo
-		return diff / (absA + absB) < epsilon;
-	}
-}
-*/
 void SensorDistancia::task_main()
 {
 	PX4_INFO("Hello Sky!");
 
 	int sensor_sub_fd_sensor = orb_subscribe(ORB_ID(distance_sensor));
+	int vehicle_control_mode_fd = orb_subscribe(ORB_ID(vehicle_control_mode));
+	int vehicle_status_fd = orb_subscribe(ORB_ID(vehicle_status));
+
 	orb_set_interval(sensor_sub_fd_sensor, 200);
+	orb_set_interval(vehicle_control_mode_fd, 200);
+	orb_set_interval(vehicle_status_fd, 200);
+
 
 	while(!_task_should_exit){
 		struct distance_sensor_s distance_sensor_param;
-		orb_copy(ORB_ID(distance_sensor), sensor_sub_fd_sensor, &distance_sensor_param);
+		struct vehicle_control_mode_s vehicle_control_mode_param;
+		struct vehicle_status_s status;
 
-		if (1 < distance_sensor_param.current_distance){
+		orb_copy(ORB_ID(distance_sensor), sensor_sub_fd_sensor, &distance_sensor_param);
+		orb_copy(ORB_ID(vehicle_control_mode), vehicle_control_mode_fd, &vehicle_control_mode_param);
+		orb_copy(ORB_ID(vehicle_status), vehicle_status_fd, &status);
+
+
+
+		if (0.5f < distance_sensor_param.current_distance){
 			PX4_INFO("distance_sensor:\n\tmin_distance\t%8.4f\n\tmax_distance\t%8.4f\n\tcurrent_distance\t%8.4f\n\tcovariance\t%8.4f\n\ttype\t%d\n\tOrientation\t%d\n\n",
 			(double)distance_sensor_param.min_distance,
 			(double)distance_sensor_param.max_distance,
@@ -178,6 +181,36 @@ void SensorDistancia::task_main()
 			(double)distance_sensor_param.covariance,
 			(uint8_t)distance_sensor_param.type,
 			(uint16_t)distance_sensor_param.orientation);
+
+			PX4_INFO("vehicle_control_mode:\n\tflag_armed\t%d\n\tflag_control_auto_enabled\t%d\n\tflag_control_manual_enabled\t%d\n\n",
+			vehicle_control_mode_param.flag_armed,
+			vehicle_control_mode_param.flag_control_auto_enabled,
+			vehicle_control_mode_param.flag_control_manual_enabled
+			);
+
+			if (distance_sensor_param.current_distance < 5 ){
+				struct vehicle_command_s cmd = {
+					.timestamp = 0,
+					.param5 = NAN,
+					.param6 = NAN,
+					/* minimum pitch */
+					.param1 = NAN,
+					.param2 = NAN,
+					.param3 = NAN,
+					.param4 = NAN,
+					.param7 = NAN,
+					.command = vehicle_command_s::VEHICLE_CMD_NAV_LAND,
+					.target_system = status.system_id,
+					.target_component = status.component_id,
+					.source_system = 1,
+					.source_component = 2,
+					.confirmation = 1,
+					.from_external = true
+				};
+
+				orb_advert_t h = orb_advertise_queue(ORB_ID(vehicle_command), &cmd, vehicle_command_s::ORB_QUEUE_LENGTH);
+				(void)orb_unadvertise(h);
+			}
 		}
 
 	}
