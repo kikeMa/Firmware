@@ -123,6 +123,9 @@ SensorDistancia::~SensorDistancia()
 	sensor_distancia_q::instance = nullptr;
 }
 
+int auxKike = 1;
+
+
 int SensorDistancia::start()
 {
 	ASSERT(_control_task == -1);
@@ -174,6 +177,7 @@ void SensorDistancia::task_main()
 
 
 		if (0.5f < distance_sensor_param.current_distance){
+			/*
 			PX4_INFO("distance_sensor:\n\tmin_distance\t%8.4f\n\tmax_distance\t%8.4f\n\tcurrent_distance\t%8.4f\n\tcovariance\t%8.4f\n\ttype\t%d\n\tOrientation\t%d\n\n",
 			(double)distance_sensor_param.min_distance,
 			(double)distance_sensor_param.max_distance,
@@ -187,13 +191,75 @@ void SensorDistancia::task_main()
 			vehicle_control_mode_param.flag_control_auto_enabled,
 			vehicle_control_mode_param.flag_control_manual_enabled
 			);
+*/
+			if ( distance_sensor_param.current_distance < 10 && auxKike == 1){
+/*
+				PX4_INFO("vehicle_control_mode:\n\tflag_armed\t%d\n\tflag_control_auto_enabled\t%d\n\tflag_control_manual_enabled\t%d\n\n",
+				vehicle_control_mode_param.flag_armed,
+				vehicle_control_mode_param.flag_control_auto_enabled,
+				vehicle_control_mode_param.flag_control_manual_enabled
+				);
+*/
 
-			if (distance_sensor_param.current_distance < 5 ){
+				// Con este comando pausamos la misión y para que no se choque.
+
 				struct vehicle_command_s cmd = {
 					.timestamp = 0,
 					.param5 = NAN,
 					.param6 = NAN,
-					/* minimum pitch */
+					.param1 = 1,
+					.param2 = 4,
+					.param3 = 3,
+					.param4 = NAN,
+					.param7 = NAN,
+					.command = vehicle_command_s::VEHICLE_CMD_DO_SET_MODE,
+					.target_system = status.system_id,
+					.target_component = status.component_id,
+					.source_system = 1,
+					.source_component = 2,
+					.confirmation = 1,
+					.from_external = true
+				};
+
+				orb_advert_t h = orb_advertise_queue(ORB_ID(vehicle_command), &cmd, vehicle_command_s::ORB_QUEUE_LENGTH);
+				(void)orb_unadvertise(h);
+
+
+/*
+				// Entro dentro de state posctl pero necesito
+				cmd = {
+					.timestamp = 0,
+					.param5 = NAN,
+					.param6 = NAN,
+					.param1 = 1,
+					.param2 = 3,
+					.param3 = 0,
+					.param4 = NAN,
+					.param7 = NAN,
+					.command = vehicle_command_s::VEHICLE_CMD_DO_SET_MODE,
+					.target_system = status.system_id,
+					.target_component = status.component_id,
+					.source_system = 1,
+					.source_component = 2,
+					.confirmation = 1,
+					.from_external = true
+				};
+*/
+			//	h = orb_advertise_queue(ORB_ID(vehicle_command), &cmd, vehicle_command_s::ORB_QUEUE_LENGTH);
+			//	(void)orb_unadvertise(h);
+
+
+				PX4_INFO("vehicle_control_mode:\n\tflag_armed\t%d\n\tflag_control_auto_enabled\t%d\n\tflag_control_manual_enabled\t%d\n\n",
+				vehicle_control_mode_param.flag_armed,
+				vehicle_control_mode_param.flag_control_auto_enabled,
+				auxKike
+				);
+				auxKike = 0;
+				/*
+				struct vehicle_command_s cmd = {
+					.timestamp = 0,
+					.param5 = NAN,
+					.param6 = NAN,
 					.param1 = NAN,
 					.param2 = NAN,
 					.param3 = NAN,
@@ -210,6 +276,8 @@ void SensorDistancia::task_main()
 
 				orb_advert_t h = orb_advertise_queue(ORB_ID(vehicle_command), &cmd, vehicle_command_s::ORB_QUEUE_LENGTH);
 				(void)orb_unadvertise(h);
+
+				*/
 			}
 		}
 
