@@ -92,6 +92,8 @@ public:
 
 	static void task_main_sensor_distancia(int argc, char *argv[]);
 
+	int send_mission_count(struct sockaddr_in gcAddr, int sock);
+
 	void task_main();
 private:
 	bool		_task_should_exit = false;		/**< if true, task should exit */
@@ -160,7 +162,6 @@ void SensorDistancia::task_main_sensor_distancia(int argc, char *argv[])
 void SensorDistancia::task_main()
 {
 	PX4_INFO("Hello Sky!");
-	PX4_INFO("1");
 
 	int sensor_sub_fd_sensor = orb_subscribe(ORB_ID(distance_sensor));
 	int vehicle_control_mode_fd = orb_subscribe(ORB_ID(vehicle_control_mode));
@@ -169,25 +170,19 @@ void SensorDistancia::task_main()
 	orb_set_interval(sensor_sub_fd_sensor, 200);
 	orb_set_interval(vehicle_control_mode_fd, 200);
 	orb_set_interval(vehicle_status_fd, 200);
-	PX4_INFO("2");
 
+	sleep(5); // Sleep one second
 
 	char target_ip[100];
 
-	int sock = socket(PF_INET, SOCK_DGRAM, IPPROTO_UDP);
-	struct sockaddr_in gcAddr;
 	struct sockaddr_in locAddr;
 	//struct sockaddr_in fromAddr;
 	uint8_t buf[BUFFER_LENGTH];
 	ssize_t recsize;
 	socklen_t fromlen;
-	mavlink_message_t msg;
-	uint16_t len;
 	int i = 0;
 	//int success = 0;
 	unsigned int temp = 0;
-
-	PX4_INFO("3");
 
 	strcpy(target_ip, "127.0.0.1");
 	memset(&locAddr, 0, sizeof(locAddr));
@@ -199,75 +194,45 @@ void SensorDistancia::task_main()
 		return;
 	}
 
-	PX4_INFO("4");
-
-	memset(&gcAddr, 0, sizeof(gcAddr));
-	gcAddr.sin_family = AF_INET;
-	gcAddr.sin_addr.s_addr = inet_addr(target_ip);
-	gcAddr.sin_port = htons(14550);
-
 
 	for (;;)
 	{
-		PX4_INFO("5");
-
-		/* Send Status
-		   uint32_t onboard_control_sensors_present,
-			  uint32_t onboard_control_sensors_enabled,
-				uint32_t onboard_control_sensors_health,
-				uint16_t load,
-				uint16_t voltage_battery,
-				 int16_t current_battery,
-				 int8_t battery_remaining,
-				  uint16_t drop_rate_comm,
-					 uint16_t errors_comm,
-					 uint16_t errors_count1,
-					  uint16_t errors_count2,
-						 uint16_t errors_count3,
-						 uint16_t errors_count4)
- */
-		mavlink_msg_sys_status_pack(1, 1, &msg, 0, 0, 0, 500, 11000, -1, -1, 0, 0, 0, 0, 0, 0);
-		PX4_INFO("5.1");
-
-		len = mavlink_msg_to_send_buffer(buf, &msg);
-
-		PX4_INFO("5.5");
-
-		//int bytes_sent = sendto(sock, buf, len, 0, (struct sockaddr*)&gcAddr, sizeof (struct sockaddr_in));
-		sendto(sock, buf, len, 0, (struct sockaddr*)&gcAddr, sizeof (struct sockaddr_in));
-
+		send_new_mission();
 		memset(buf, 0, BUFFER_LENGTH);
 		recsize = recvfrom(sock, (void *)buf, BUFFER_LENGTH, 0, (struct sockaddr *)&gcAddr, &fromlen);
 		if (recsize > 0){
 			// Something received - print out all bytes and parse packet
 
-			PX4_INFO("6");
-
-			mavlink_message_t msg1;
-			msg1.sysid = 0;
-			msg1.compid = 0;
-			msg1.len = 0;
-			msg1.msgid = 0;
+			mavlink_message_t msg;
+			msg.sysid = 0;
+			msg.compid = 0;
+			msg.len = 0;
+			msg.msgid = 0;
 
 			mavlink_status_t status;
 
 			printf("Bytes Received: %d\nDatagram: ", (int)recsize);
 
-			PX4_INFO("7");
-
 			for (i = 0; i < recsize; ++i)
 			{
 				temp = buf[i];
 				printf("%02x ", (unsigned char)temp);
-				if (mavlink_parse_char(MAVLINK_COMM_0, buf[i], &msg1, &status))
+				if (mavlink_parse_char(MAVLINK_COMM_0, buf[i], &msg, &status))
 				{
 					// Packet received
-					printf("\nReceived packet: SYS: %d, COMP: %d, LEN: %d, MSG ID: %d\n", msg1.sysid, msg1.compid, msg1.len, msg1.msgid);
+					printf("\nReceived packet: SYS: %d, COMP: %d, LEN: %d, MSG ID: %d\n", msg.sysid, msg.compid, msg.len, msg.msgid);
+					if (msg.msgid == MAVLINK_MSG_ID_MISSION_REQUEST) {
+						mavlink_mission_request_t mission_request;
+						mavlink_msg_mission_request_decode(&msg, &mission_request);
+						printf("\nmission request:, \n \tSEQ: %d, \n \tMISSION_TYPE: %d, \n", mission_request.seq,mission_request.mission_type);
+
+
+					}
 				}
 			}
 			printf("\n");
 		}
-		memset(buf, 0, BUFFER_LENGTH);
+
 		sleep(1); // Sleep one second
 	}
 
@@ -491,6 +456,52 @@ orb_advert_t h = orb_advertise_queue(ORB_ID(vehicle_command), &cmd, vehicle_comm
 
 }*/
 PX4_INFO("GoodBye");
+}
+
+int SensorDistancia::send_mission_count(struct sockaddr_in gcAddr, int sock){
+
+	mavlink_message_t msg;
+	uint16_t len;
+	uint8_t buf[BUFFER_LENGTH];
+
+	const mavlink_mission_count_t wpc {
+		.count = 1,
+		.target_system = 1,
+		.target_component = 1,
+		.mission_type = 0
+	};
+
+	// Generamos mensaje
+	mavlink_msg_mission_count_encode(255, 0, &msg, &wpc);
+	len = mavlink_msg_to_send_buffer(buf, &msg);
+
+	uint16_t bytes_sent = sendto(sock, buf, len, 0, (struct sockaddr*)&gcAddr, sizeof (struct sockaddr_in));
+	if (bytes_sent != len){
+		PX4_WARN("Error al enviar count_mission");
+		return -1;
+	}
+	return bytes_sent;
+}
+
+int SensorDistancia::send_new_mission(){
+
+	int sock = socket(PF_INET, SOCK_DGRAM, IPPROTO_UDP);
+	struct sockaddr_in gcAddr;
+
+	char target_ip[10];
+	strcpy(target_ip, "127.0.0.1");
+
+
+	memset(&gcAddr, 0, sizeof(gcAddr));
+	gcAddr.sin_family = AF_INET;
+	gcAddr.sin_addr.s_addr = inet_addr(target_ip);
+	gcAddr.sin_port = htons(14557);
+
+	// Enviamos count a para establecer nueva misión
+	int leng_send_count = send_mission_count(gcAddr, sock);
+	PX4_INFO("LENG SEND COUNT %d", leng_send_count);
+
+
 }
 
 int px4_simple_app_main(int argc, char *argv[])
