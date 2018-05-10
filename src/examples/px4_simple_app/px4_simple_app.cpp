@@ -219,10 +219,6 @@ void SensorDistancia::task_main()
 		);
 		*/
 
-		connect_mavlink();
-
-		send_new_mission();
-
 		// Con este comando pausamos la misión y para que no se choque.
 
 		struct vehicle_command_s cmd = {
@@ -244,6 +240,12 @@ void SensorDistancia::task_main()
 		};
 		orb_advert_t h = orb_advertise_queue(ORB_ID(vehicle_command), &cmd, vehicle_command_s::ORB_QUEUE_LENGTH);
 		(void)orb_unadvertise(h);
+
+
+				connect_mavlink();
+
+				send_new_mission();
+
 /*
 
 		const mavlink_mission_count_t wpc {
@@ -415,12 +417,12 @@ int SensorDistancia::send_item0(){
 	uint8_t buf[BUFFER_LENGTH];
 
 	const mavlink_mission_item_t wp {
-		.param1 = 0.0f,
+		.param1 = 15.0f,
 		.param2 = 0.0f,
 		.param3 = 0.0f,
 		.param4 = NAN,
-		.x = 47.396675f,
-		.y = 8.550455f,
+		.x = 47.398155f,
+		.y = 8.540095f,
 		.z = 10.000000f,
 		.seq = 0,
 		.command = 22,
