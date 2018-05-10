@@ -238,15 +238,40 @@ void SensorDistancia::task_main()
 			.confirmation = 1,
 			.from_external = true
 		};
+
 		orb_advert_t h = orb_advertise_queue(ORB_ID(vehicle_command), &cmd, vehicle_command_s::ORB_QUEUE_LENGTH);
 		(void)orb_unadvertise(h);
 
 
-				connect_mavlink();
+		connect_mavlink();
 
-				send_new_mission();
+		send_new_mission();
 
-/*
+
+		cmd = {
+			.timestamp = 0,
+			.param5 = NAN,
+			.param6 = NAN,
+			.param1 = 1,
+			.param2 = 4,
+			.param3 = 4,
+			.param4 = NAN,
+			.param7 = NAN,
+			.command = vehicle_command_s::VEHICLE_CMD_DO_SET_MODE,
+			.target_system = status.system_id,
+			.target_component = status.component_id,
+			.source_system = 1,
+			.source_component = 2,
+			.confirmation = 1,
+			.from_external = true
+		};
+
+
+		h = orb_advertise_queue(ORB_ID(vehicle_command), &cmd, vehicle_command_s::ORB_QUEUE_LENGTH);
+		(void)orb_unadvertise(h);
+
+
+				/*
 
 		const mavlink_mission_count_t wpc {
 			.count = 1,
