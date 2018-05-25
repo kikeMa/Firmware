@@ -61,7 +61,7 @@
 #include <uORB/topics/vehicle_attitude.h>	// velocidad (rollspeed, pitchspeed, yawspeed)
 #include <uORB/topics/distance_sensor.h>	// sensor de distancia (min_distance, max_distance, current_distance, coveriance ,MAV_DISTANCE_SENSOR_LASER)
 #include <uORB/topics/vehicle_control_mode.h>	// sensor de distancia (min_distance, max_distance, current_distance, coveriance ,MAV_DISTANCE_SENSOR_LASER)
-//#include <uORb/topics/vehicle_local_position.h>	// altura (z)
+#include <uORB/topics/vehicle_global_position.h>	// altura (z)
 
 extern "C" __EXPORT int px4_simple_app_main(int argc, char *argv[]);
 
@@ -94,7 +94,7 @@ public:
 
 	int send_mission_count(uint16_t count, uint8_t target_system, uint8_t target_component, uint8_t mission_type);
 	int connect_mavlink();
-	int send_new_mission(mavlink_mission_count_t mission_count ,mavlink_mission_item_int_t * items , float * newWaypoint, uint16_t pos);
+	int send_new_mission(mavlink_mission_count_t mission_count ,mavlink_mission_item_int_t * items , int32_t * newWaypoint, uint16_t pos);
 	int send_request_list(uint8_t mission_type);
 	int recibir_request_int();
 	int send_item(float param1, float param2, float param3, float param4, int32_t x, int32_t y, float z, uint16_t seq, uint16_t command, uint8_t target_system, uint8_t target_component, uint8_t frame, uint8_t current, uint8_t autocontinue, uint8_t mission_type);
@@ -105,7 +105,7 @@ public:
 	int send_request(uint16_t seq, uint8_t target_system, uint8_t target_component, uint8_t mission_type);
 	mavlink_mission_item_int_t receive_mission_item_int();
 	int send_mission_ack(uint8_t target_system, uint8_t target_component, uint8_t  ,uint8_t mission_type);
-	void obtain_new_point(struct position_setpoint_triplet_s position_setpoint_triplet, float * newPoint);
+	void obtain_new_point(struct position_setpoint_triplet_s position_setpoint_triplet, int32_t * newPoint, struct vehicle_global_position_s vehicle_global_position);
 
 	void task_main();
 private:
@@ -186,11 +186,13 @@ void SensorDistancia::task_main()
 	int vehicle_control_mode_fd = orb_subscribe(ORB_ID(vehicle_control_mode));
 	int vehicle_status_fd = orb_subscribe(ORB_ID(vehicle_status));
 	int position_setpoint_triplet_fd = orb_subscribe(ORB_ID(position_setpoint_triplet));
+	int vehicle_global_position_fd = orb_subscribe(ORB_ID(vehicle_global_position));
 
 	orb_set_interval(sensor_sub_fd_sensor, 200);
 	orb_set_interval(vehicle_control_mode_fd, 200);
 	orb_set_interval(vehicle_status_fd, 200);
 	orb_set_interval(position_setpoint_triplet_fd, 200);
+	orb_set_interval(vehicle_global_position_fd, 200);
 
 
 	while(!_task_should_exit){
@@ -198,11 +200,13 @@ void SensorDistancia::task_main()
 		struct vehicle_control_mode_s vehicle_control_mode_param;
 		struct vehicle_status_s status;
 		struct position_setpoint_triplet_s position_setpoint_triplet;
+		struct vehicle_global_position_s vehicle_global_position;
 
 		orb_copy(ORB_ID(distance_sensor), sensor_sub_fd_sensor, &distance_sensor_param);
 		orb_copy(ORB_ID(vehicle_control_mode), vehicle_control_mode_fd, &vehicle_control_mode_param);
 		orb_copy(ORB_ID(vehicle_status), vehicle_status_fd, &status);
 		orb_copy(ORB_ID(position_setpoint_triplet), position_setpoint_triplet_fd, &position_setpoint_triplet);
+		orb_copy(ORB_ID(vehicle_global_position), vehicle_global_position_fd, &vehicle_global_position);
 
 
 
@@ -258,10 +262,10 @@ void SensorDistancia::task_main()
 		orb_advert_t h = orb_advertise_queue(ORB_ID(vehicle_command), &cmd, vehicle_command_s::ORB_QUEUE_LENGTH);
 		(void)orb_unadvertise(h);
 
-		float newPoint[2];
-		obtain_new_point(position_setpoint_triplet, newPoint);
+		int32_t newPoint[2];
+		obtain_new_point(position_setpoint_triplet, newPoint, vehicle_global_position);
 
-		PX4_INFO("New point is %f - %f ",(double)newPoint[0], (double)newPoint[1]);
+		PX4_INFO("New point is %d - %d ",newPoint[0], newPoint[1]);
 
 		connect_mavlink();
 
@@ -438,21 +442,40 @@ void SensorDistancia::task_main()
 	PX4_INFO("GoodBye");
 }
 
-void SensorDistancia::obtain_new_point(struct position_setpoint_triplet_s position_setpoint_triplet, float * newPoint){
+void SensorDistancia::obtain_new_point(struct position_setpoint_triplet_s position_setpoint_triplet, int32_t * newPoint, struct vehicle_global_position_s vehicle_global_position){
+
+	int32_t x_previa = position_setpoint_triplet.previous.lon * 10000000;
+	int32_t y_previa = position_setpoint_triplet.previous.lat * 10000000;
+
+	int32_t x_next = position_setpoint_triplet.current.lon * 10000000;
+	int32_t y_next = position_setpoint_triplet.current.lat * 10000000;
+
+	int32_t x_current = vehicle_global_position.lon * 10000000;
+	int32_t y_current = vehicle_global_position.lat * 10000000;
+
+	PX4_INFO("lat y lon del vehiculo actualmente: %d - %d", x_current, y_current);
 
 	// Se calcula el vector que une los dos puntos (previous y current)
-	float vector[2];
-	vector[0] = position_setpoint_triplet.current.lon - position_setpoint_triplet.previous.lon;
-	vector[1] = position_setpoint_triplet.current.lat - position_setpoint_triplet.previous.lat;
+	int32_t vector[2];
+	vector[0] = x_next - x_previa;
+	vector[1] = y_next - y_previa;
 
 	// Se obtiene el vector perpendicular
-	float vector_perpendicular[2];
-	vector_perpendicular[0] = 0.0001;
+	double vector_perpendicular[2];
+	vector_perpendicular[0] = 1;
 	vector_perpendicular[1] = (-1) * vector[0] / vector[1];
 
+	//Escalamos el número para que el modulo sea el correcto x/d² and y/d²
+
+	// Calculamos d para que la distancia sea 500
+	double d = sqrt(( pow(vector_perpendicular[0],2) + pow(vector_perpendicular[1],2) )/25000);
+
+	vector_perpendicular[0] = vector_perpendicular[0] / d;
+	vector_perpendicular[1] = vector_perpendicular[0] / d;
+
 	// Se obtiene el punto que pasa por previous y el vector paralelo
-	newPoint[0] = vector_perpendicular[0] + (float)position_setpoint_triplet.previous.lon;
-	newPoint[1] = vector_perpendicular[1] + (float)position_setpoint_triplet.previous.lat;
+	newPoint[0] = rint(vector_perpendicular[0] + x_current);
+	newPoint[1] = rint(vector_perpendicular[1] + y_current);
 }
 
 
@@ -658,7 +681,7 @@ mavlink_mission_item_int_t SensorDistancia::receive_mission_item_int(){
 	return mission_item;
 }
 
-int SensorDistancia::send_new_mission(mavlink_mission_count_t mission_count ,mavlink_mission_item_int_t * items , float * newWaypoint, uint16_t pos){
+int SensorDistancia::send_new_mission(mavlink_mission_count_t mission_count ,mavlink_mission_item_int_t * items , int32_t * newWaypoint, uint16_t pos){
 
 	// Enviamos count a para establecer nueva misión
 	int leng_send_count = send_mission_count(4, 1, 1, 0);
@@ -671,11 +694,8 @@ int SensorDistancia::send_new_mission(mavlink_mission_count_t mission_count ,mav
 	while (count < mission_count.count ){
 
 		if (count == pos) {
-			/*
-			int32_t x = newWaypoint[1] * 1000000;
-			int32_t y = newWaypoint[0] * 1000000;
-*/
-			leng_send_count = send_item(items[count].param1, items[count].param2, items[count].param3, items[count].param4, items[count].x+7000 , items[count].y , items[count].z, seq, items[count].command, items[count].target_system, items[count].target_component , items[count].frame, 1,items[count].autocontinue, items[count].mission_type );
+
+			leng_send_count = send_item(items[count].param1, items[count].param2, items[count].param3, items[count].param4, newWaypoint[1] , newWaypoint[0] , items[count].z, seq, items[count].command, items[count].target_system, items[count].target_component , items[count].frame, 1,items[count].autocontinue, items[count].mission_type );
 			PX4_INFO("LENG NEW SEND ITEM %d", leng_send_count);
 
 			err_recibir_request = recibir_request_int();
