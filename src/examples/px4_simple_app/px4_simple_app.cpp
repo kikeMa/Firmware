@@ -54,6 +54,10 @@
 #include <mavlink/mavlink_main.h>
 #include <mavlink/mavlink_command_sender.h>
 
+#include <sys/socket.h>
+#include <sys/types.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 
 //#include <mc_pos_control/mc_pos_control_main.cpp>
 #include <uORB/topics/sensor_baro.h>	// Altura por barometro
@@ -62,6 +66,7 @@
 #include <uORB/topics/distance_sensor.h>	// sensor de distancia (min_distance, max_distance, current_distance, coveriance ,MAV_DISTANCE_SENSOR_LASER)
 #include <uORB/topics/vehicle_control_mode.h>	// sensor de distancia (min_distance, max_distance, current_distance, coveriance ,MAV_DISTANCE_SENSOR_LASER)
 #include <uORB/topics/vehicle_global_position.h>	// altura (z)
+
 
 extern "C" __EXPORT int px4_simple_app_main(int argc, char *argv[]);
 
@@ -92,7 +97,9 @@ public:
 
 	static void task_main_sensor_distancia(int argc, char *argv[]);
 
-	int send_mission_count(uint16_t count, uint8_t target_system, uint8_t target_component, uint8_t mission_type);
+	//uint16_t send_mission_count(uint16_t count, uint8_t target_system, uint8_t target_component, uint8_t mission_type);
+	uint16_t send_mission_count();
+
 	int connect_mavlink();
 	int send_new_mission(mavlink_mission_count_t mission_count ,mavlink_mission_item_int_t * items , int32_t * newWaypoint, uint16_t pos);
 	int send_request_list(uint8_t mission_type);
@@ -108,6 +115,15 @@ public:
 	void obtain_new_point(struct position_setpoint_triplet_s position_setpoint_triplet, int32_t * newPoint, struct vehicle_global_position_s vehicle_global_position);
 
 	void task_main();
+
+	int auxKike = 1;
+
+	// Variables globales mavlink
+	struct sockaddr_in locAddr;
+	struct sockaddr_in gcAddr;
+	int sock;
+
+
 private:
 	bool		_task_should_exit = false;		/**< if true, task should exit */
 	int		_control_task = -1;			/**< task handle for task */
@@ -143,14 +159,7 @@ SensorDistancia::~SensorDistancia()
 	sensor_distancia_q::instance = nullptr;
 }
 
-int auxKike = 1;
-
-// Variables globales mavlink
-struct sockaddr_in locAddr;
-struct sockaddr_in gcAddr;
-#define BUFFER_LENGTH 2041 // minimum buffer size that can be used with qnx (I don't know why)
-int sock;
-
+#define BUFFER_LENGTH 1024 // minimum buffer size that can be used with qnx (I don't know why)
 
 int SensorDistancia::start()
 {
@@ -479,17 +488,18 @@ void SensorDistancia::obtain_new_point(struct position_setpoint_triplet_s positi
 }
 
 
-int SensorDistancia::send_mission_count(uint16_t count, uint8_t target_system, uint8_t target_component, uint8_t mission_type){
+//uint16_t SensorDistancia::send_mission_count(uint16_t count, uint8_t target_system, uint8_t target_component, uint8_t mission_type){
+uint16_t SensorDistancia::send_mission_count(){
 
 	mavlink_message_t msg;
 	uint16_t len;
 	uint8_t buf[BUFFER_LENGTH];
 
 	const mavlink_mission_count_t wpc {
-		.count = count,
-		.target_system = target_system,
-		.target_component = target_component,
-		.mission_type = mission_type
+		.count = 4,
+		.target_system = 1,
+		.target_component = 1,
+		.mission_type = 0
 	};
 
 	// Generamos mensaje
@@ -684,7 +694,9 @@ mavlink_mission_item_int_t SensorDistancia::receive_mission_item_int(){
 int SensorDistancia::send_new_mission(mavlink_mission_count_t mission_count ,mavlink_mission_item_int_t * items , int32_t * newWaypoint, uint16_t pos){
 
 	// Enviamos count a para establecer nueva misión
-	int leng_send_count = send_mission_count(4, 1, 1, 0);
+	//uint16_t leng_send_count = send_mission_count(4, 1, 1, 0);
+	uint16_t leng_send_count = send_mission_count();
+
 	PX4_INFO("LENG SEND COUNT %d", leng_send_count);
 
 	int err_recibir_request = recibir_request_int();
