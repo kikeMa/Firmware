@@ -82,6 +82,11 @@
 #define AVOIDANCE 2
 #define DISTANCIA_PELIGRO 3
 #define DISTANCIA_NO_PELIGRO 5
+#define FRONT 0
+#define LEFT 1
+#define BACK 2
+#define RIGHT 3
+
 
 extern "C" __EXPORT int px4_simple_app_main(int argc, char *argv[]);
 
@@ -112,11 +117,12 @@ public:
 
 	static void task_main_sensor_distancia(int argc, char *argv[]);
 
-	void obtain_new_point(struct position_setpoint_triplet_s position_setpoint_triplet, double * lat, double * lon, struct vehicle_global_position_s vehicle_global_position);
+	void obtain_new_point(struct position_setpoint_triplet_s position_setpoint_triplet, double * lat, double * lon, struct vehicle_global_position_s vehicle_global_position, int orientation);
 	void task_main();
-	void execute_obstacle_avoidance(struct vehicle_command_s cmd, orb_advert_t cmd_pub);
+	void execute_obstacle_avoidance(struct vehicle_command_s cmd, orb_advert_t cmd_pub, int orientation);
 	bool lectura_suelo(int vehicle_attitude_fd, double altura_real, double distancia_real);
 	void continue_mission(struct vehicle_command_s cmd, orb_advert_t cmd_pub);
+	void pause_mission(struct vehicle_command_s cmd, orb_advert_t cmd_pub);
 
 private:
 	bool		_task_should_exit = false;		/**< if true, task should exit */
@@ -128,6 +134,10 @@ private:
 	int distancia_no_peligro;
 	int distancia_peligro;
 	uint64_t start_time;
+	int no_avoidance;
+	int warning_left;
+	int warning_right;
+	int warning_back;
 };
 
 SensorDistancia::SensorDistancia()
@@ -209,20 +219,35 @@ void SensorDistancia::task_main()
 
 
 	/* one could wait for multiple topics with this technique, just using one here */
-	px4_pollfd_struct_t fds[] = {
+	px4_pollfd_struct_t fds[7]; /* = {
 		{ .fd = sensor_sub_fd_sensor, .events = POLLIN },
 		{ .fd = vehicle_control_mode_fd, .events = POLLIN },
 		{ .fd = vehicle_status_fd, .events = POLLIN },
 		{ .fd = position_setpoint_triplet_fd, .events = POLLIN },
 		{ .fd = vehicle_global_position_fd, .events = POLLIN },
 		{ .fd = vehicle_local_position_setpoint_fd, .events = POLLIN },
-		{ .fd = vehicle_attitude_fd, .events = POLLIN },
+		{ .fd = vehicle_attitude_fd, .events = POLLIN }
+	}; */
+	fds[0].fd = sensor_sub_fd_sensor;
+	fds[0].events = POLLIN;
 
-		/* there could be more file descriptors here, in the form like:
-		* { .fd = other_sub_fd,   .events = POLLIN },
-		*/
-	};
+	fds[1].fd = vehicle_control_mode_fd;
+	fds[1].events = POLLIN;
 
+	fds[2].fd = vehicle_status_fd;
+	fds[2].events = POLLIN;
+
+	fds[3].fd = position_setpoint_triplet_fd;
+	fds[3].events = POLLIN;
+
+	fds[4].fd = vehicle_global_position_fd;
+	fds[4].events = POLLIN;
+
+	fds[5].fd = vehicle_local_position_setpoint_fd;
+	fds[5].events = POLLIN;
+
+	fds[6].fd = vehicle_attitude_fd;
+	fds[6].events = POLLIN;
 
 	// publisher for commands
 	struct vehicle_command_s cmd;
@@ -233,6 +258,10 @@ void SensorDistancia::task_main()
 	//int counter_prueba = 0;
 	fase_de_lectura = NO_DANGER;
 	int contador_lecturas_no_peligrosas = 0;
+	no_avoidance = true;
+	warning_left = false;
+	warning_right = false;
+	warning_back = false;
 
 	while(!_task_should_exit){
 		/* wait for sensor update of 1 file descriptor for 1000 ms (1 second) */
@@ -266,11 +295,12 @@ void SensorDistancia::task_main()
 				orb_copy(ORB_ID(vehicle_control_mode), vehicle_control_mode_fd, &vehicle_control_mode_param);
 				orb_copy(ORB_ID(vehicle_local_position_setpoint), vehicle_local_position_setpoint_fd, &vehicle_local_position_setpoint_param);
 
-/*
+				/*
 				struct vehicle_status_s status;
 				orb_copy(ORB_ID(vehicle_status), vehicle_status_fd, &status);
 				PX4_INFO("ESTADO DEL DRONE %d",status.nav_state);
-*/
+				*/
+
 
 				double speed = sqrt(pow(vehicle_local_position_setpoint_param.vx,2)+pow(vehicle_local_position_setpoint_param.vy,2));
 				// PX4_INFO("distance : %f",(double)distance_sensor_param.current_distance);
@@ -279,60 +309,111 @@ void SensorDistancia::task_main()
 				distancia_peligro = DISTANCIA_PELIGRO + rint(speed);
 
 
-				if (distance_sensor_param.orientation == 0){
-					switch (fase_de_lectura) {
+				switch (fase_de_lectura) {
 
-						case NO_DANGER:
-							if (distance_sensor_param.current_distance < distancia_no_peligro){
-								fase_de_lectura = DANGER;
-							}
-							break;
-
-						case DANGER:
-							if (distance_sensor_param.current_distance > distancia_no_peligro){
-								// Si no detectamos lecturas positivas
-								contador_lecturas_no_peligrosas++;
-								if(contador_lecturas_no_peligrosas > 3){
-									contador_lecturas_no_peligrosas = 0;
-									fase_de_lectura = NO_DANGER;
-								}
-							} else {
-								// Comprobamos si la lectura es de suelo
-								bool suelo = lectura_suelo(vehicle_attitude_fd, vehicle_local_position_setpoint_param.z, distance_sensor_param.current_distance);
-								if (distance_sensor_param.current_distance < distancia_peligro && !suelo) {
-									fase_de_lectura = AVOIDANCE;
-									execute_obstacle_avoidance(cmd, cmd_pub);
-									start_time = hrt_absolute_time();
-								}
-							}
-							break;
-
-						case AVOIDANCE:
-							uint64_t diff_time = hrt_absolute_time() - start_time;
-
-							// Tiempo en recontinuar la mision
-							if (diff_time > 5000000) {
-								continue_mission(cmd, cmd_pub);
-								fase_de_lectura = NO_DANGER;
-							} else { // Mientras la evasión está activa, comprobamos sensor
-								bool suelo = lectura_suelo(vehicle_attitude_fd, vehicle_local_position_setpoint_param.z, distance_sensor_param.current_distance);
-								if (distance_sensor_param.current_distance < distancia_peligro && !suelo) {
-									PX4_INFO("ESQUIVA MIENTRA ESTA ESQUIVANDO");
-									execute_obstacle_avoidance(cmd, cmd_pub);
-									start_time = hrt_absolute_time();
-								}
-							}
-
-							break;
-
+					case NO_DANGER:
+					if (distance_sensor_param.current_distance < distancia_no_peligro && distance_sensor_param.orientation == FRONT){
+						fase_de_lectura = DANGER;
 					}
+					break;
+
+					case DANGER:
+					if (distance_sensor_param.current_distance > distancia_no_peligro && distance_sensor_param.orientation == FRONT){
+						// Si no detectamos lecturas positivas
+						contador_lecturas_no_peligrosas++;
+						if(contador_lecturas_no_peligrosas > 3){
+							contador_lecturas_no_peligrosas = 0;
+							fase_de_lectura = NO_DANGER;
+						}
+					} else {
+						// Comprobamos si la lectura es de suelo
+						bool suelo = lectura_suelo(vehicle_attitude_fd, vehicle_local_position_setpoint_param.z, distance_sensor_param.current_distance);
+						if (distance_sensor_param.current_distance < distancia_peligro && !suelo && distance_sensor_param.orientation == FRONT) {
+							pause_mission(cmd, cmd_pub);
+							fase_de_lectura = AVOIDANCE;
+						}
+					}
+					break;
+
+					case AVOIDANCE:
+
+					// Miramos si hay un objeto en la direccion donde vamos a realizar la evasión
+					if (no_avoidance){
+						switch (distance_sensor_param.orientation) {
+							case LEFT:
+							if (distance_sensor_param.current_distance > distancia_peligro) {
+								execute_obstacle_avoidance(cmd, cmd_pub, LEFT);
+								start_time = hrt_absolute_time();
+								no_avoidance = false;
+								warning_left = false;
+								warning_right = false;
+							} else {
+								warning_left = true;
+							}
+							break;
+
+							case RIGHT:
+							if (distance_sensor_param.current_distance > distancia_peligro) {
+								execute_obstacle_avoidance(cmd, cmd_pub, RIGHT);
+								start_time = hrt_absolute_time();
+								no_avoidance = false;
+								warning_left = false;
+								warning_right = false;
+
+							} else {
+								warning_right = true;
+							}
+							break;
+
+							case BACK:
+							if (warning_left && warning_right){
+								if (distance_sensor_param.current_distance > distancia_peligro) {
+									execute_obstacle_avoidance(cmd, cmd_pub, BACK);
+									start_time = hrt_absolute_time();
+									no_avoidance = false;
+									warning_left = false;
+									warning_right = false;
+
+								} else {
+									warning_back = true;
+								}
+							}
+							break;
+
+						}
+					} else {
+						uint64_t diff_time = hrt_absolute_time() - start_time;
+
+
+						// Tiempo en recontinuar la mision
+						if (diff_time > 5000000) {
+							no_avoidance = true;
+							continue_mission(cmd, cmd_pub);
+							fase_de_lectura = NO_DANGER;
+						}
+					}
+
+					if ( warning_left && warning_right && warning_back ){
+						PX4_ERR("Imposible esquivar");
+					}
+
+					/*
+					else { // Mientras la evasión está activa, comprobamos sensor
+						bool suelo = lectura_suelo(vehicle_attitude_fd, vehicle_local_position_setpoint_param.z, distance_sensor_param.current_distance);
+						if (distance_sensor_param.current_distance < distancia_peligro && !suelo) {
+							pause_mission(cmd, cmd_pub);
+							no_avoidance = true;
+						}
+					}
+					*/
+					break;
 				}
 			}
 		}
 	}
 }
 
-void SensorDistancia::execute_obstacle_avoidance(struct vehicle_command_s cmd, orb_advert_t cmd_pub){
+void SensorDistancia::execute_obstacle_avoidance(struct vehicle_command_s cmd, orb_advert_t cmd_pub, int orientation){
 
 	struct vehicle_status_s status;
 	struct position_setpoint_triplet_s position_setpoint_triplet;
@@ -345,9 +426,7 @@ void SensorDistancia::execute_obstacle_avoidance(struct vehicle_command_s cmd, o
 
 	double lat;
 	double lon;
-	obtain_new_point(position_setpoint_triplet, &lat, &lon , vehicle_global_position);
-
-	PX4_INFO("New point is %f - %f ",(double)lat, (double)lon);
+	obtain_new_point(position_setpoint_triplet, &lat, &lon , vehicle_global_position, orientation);
 
 	cmd = {
 		.timestamp = hrt_absolute_time(),
@@ -370,7 +449,7 @@ void SensorDistancia::execute_obstacle_avoidance(struct vehicle_command_s cmd, o
 	orb_publish(ORB_ID(vehicle_command), cmd_pub, &cmd);
 
 	// Esperamos lo suficiente para que el dron realice el giro
-	sleep(2);
+	sleep(3);
 
 }
 
@@ -401,7 +480,37 @@ void SensorDistancia::continue_mission(struct vehicle_command_s cmd, orb_advert_
 	orb_publish(ORB_ID(vehicle_command), cmd_pub, &cmd);
 }
 
-void SensorDistancia::obtain_new_point(struct position_setpoint_triplet_s position_setpoint_triplet, double * lat, double * lon, struct vehicle_global_position_s vehicle_global_position){
+void SensorDistancia::pause_mission(struct vehicle_command_s cmd, orb_advert_t cmd_pub){
+
+	struct vehicle_global_position_s vehicle_global_position;
+	orb_copy(ORB_ID(vehicle_global_position), vehicle_global_position_fd, &vehicle_global_position);
+
+	struct vehicle_status_s status;
+	orb_copy(ORB_ID(vehicle_status), vehicle_status_fd, &status);
+
+	cmd = {
+		.timestamp = 0,
+		.param5 = NAN,
+		.param6 = NAN,
+		.param1 = -1,
+		.param2 = 1,
+		.param3 = 0,
+		.param4 = NAN,
+		.param7 = NAN,
+		.command = 192,
+		.target_system = status.system_id,
+		.target_component = status.component_id,
+		.source_system = 1,
+		.source_component = 2,
+		.confirmation = 1,
+		.from_external = true
+	};
+
+
+	orb_publish(ORB_ID(vehicle_command), cmd_pub, &cmd);
+}
+
+void SensorDistancia::obtain_new_point(struct position_setpoint_triplet_s position_setpoint_triplet, double * lat, double * lon, struct vehicle_global_position_s vehicle_global_position, int orientation){
 
 
 	// PX4_INFO("Follow Target previous is %f - %f ",position_setpoint_triplet.current.lat, position_setpoint_triplet.current.lon);
@@ -410,8 +519,24 @@ void SensorDistancia::obtain_new_point(struct position_setpoint_triplet_s positi
 
 	// calculo el vector normal a los dos puntos
 	double vector_normal [2];
-	vector_normal[0] = position_setpoint_triplet.current.lon - vehicle_global_position.lon;
-	vector_normal[1] = (position_setpoint_triplet.current.lat - vehicle_global_position.lat) * (-1);
+	vector_normal[0] = 0;
+	vector_normal[1] = 0;
+
+	switch (orientation) {
+		case LEFT:
+		vector_normal[0] = position_setpoint_triplet.current.lon - vehicle_global_position.lon;
+		vector_normal[1] = (position_setpoint_triplet.current.lat - vehicle_global_position.lat) * (-1);
+		break;
+		case RIGHT:
+		vector_normal[0] = (position_setpoint_triplet.current.lon - vehicle_global_position.lon) * (-1);
+		vector_normal[1] = position_setpoint_triplet.current.lat - vehicle_global_position.lat;
+		break;
+		case BACK:
+		vector_normal[0] = (position_setpoint_triplet.current.lat - vehicle_global_position.lat) * (-1);
+		vector_normal[1] = (position_setpoint_triplet.current.lon - vehicle_global_position.lon) * (-1);
+		break;
+	}
+
 
 	// Calculo el vector unitario
 	double length = sqrt(pow(vector_normal[0],2) + pow(vector_normal[1],2));
@@ -443,10 +568,11 @@ bool SensorDistancia::lectura_suelo(int vehicle_attitude_fd, double altura_real,
 	mavlink_quaternion_to_euler(vehicle_attitude_param.q,&roll, &pitch, &yaw);
 	double altura_predecida = sin(pitch) * distancia_real;
 
+	/*
 	PX4_INFO("PITCH %f",(double)pitch);
 	PX4_INFO("ALTURA %f",altura_real);
 	PX4_INFO("ALTURA CALCULADA %f",altura_predecida);
-
+	*/
 
 	if ( (altura_predecida + 0.5) > altura_real ){
 		return false;
